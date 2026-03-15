@@ -1,0 +1,160 @@
+name: Content Agent - Draft Generation
+
+on:
+  # Triggers when Scout pushes new briefs
+  push:
+    paths:
+      - 'handoffs/scout-to-content/briefs/**'
+  # Manual trigger for ad-hoc drafts
+  workflow_dispatch:
+    inputs:
+      brief_file:
+        description: 'Specific brief file to process (e.g. 2026-03-15T1800-001-brief.md)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+env:
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  CONTENT_CONFIG: agents/content/config.md
+  BRIEFS_DIR: handoffs/scout-to-content/briefs
+  DRAFTS_DIR: handoffs/content-to-distribution/drafts
+  ESCALATION_DIR: handoffs/content-to-governance
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install anthropic
+
+      - name: Find pending briefs
+        id: find_briefs
+        run: |
+          if [ -n "${{ github.event.inputs.brief_file }}" ]; then
+            echo "briefs=$BRIEFS_DIR/${{ github.event.inputs.brief_file }}" >> $GITHUB_OUTPUT
+          else
+            # Find all briefs with status: pending
+            PENDING=$(grep -rl "status: pending" "$BRIEFS_DIR/" 2>/dev/null || true)
+            echo "briefs=$PENDING" >> $GITHUB_OUTPUT
+            echo "Found pending briefs: $PENDING"
+          fi
+
+      - name: Run Content agent
+        if: steps.find_briefs.outputs.briefs != ''
+        run: |
+          python scripts/content-draft.py \
+            --config "$CONTENT_CONFIG" \
+            --briefs "${{ steps.find_briefs.outputs.briefs }}" \
+            --output-dir "$DRAFTS_DIR" \
+            --brand-dir "brand/"
+        env:
+          BYBIT_AFFILIATE_LINK: https://www.bybit.com/invite?ref=EJ7ENB
+
+      - name: Check draft confidence scores
+        id: check_drafts
+        run: |
+          LOW_CONFIDENCE=0
+          DRAFT_COUNT=0
+          for draft in $(git ls-files --others --exclude-standard -- "$DRAFTS_DIR/*.md" 2>/dev/null); do
+            DRAFT_COUNT=$((DRAFT_COUNT + 1))
+            CONFIDENCE=$(grep -oP 'confidence:\s*\K\d+' "$draft" 2>/dev/null || echo "0")
+            if [ "$CONFIDENCE" -lt 70 ]; then
+              LOW_CONFIDENCE=$((LOW_CONFIDENCE + 1))
+              echo "LOW CONFIDENCE: $draft (score: $CONFIDENCE)"
+            fi
+          done
+          echo "draft_count=$DRAFT_COUNT" >> $GITHUB_OUTPUT
+          echo "low_confidence=$LOW_CONFIDENCE" >> $GITHUB_OUTPUT
+
+      - name: Create PR for review
+        if: steps.check_drafts.outputs.draft_count > 0
+        run: |
+          BRANCH="content/drafts-$(date -u +%Y%m%dT%H%M)"
+          git config user.name "BotDAO Content Agent"
+          git config user.email "content@botdao.ai"
+          git checkout -b "$BRANCH"
+          git add "$DRAFTS_DIR/" "$BRIEFS_DIR/" "$ESCALATION_DIR/" state/ logs/
+          git commit -m "content: ${{ steps.check_drafts.outputs.draft_count }} draft(s) ready for review"
+          git push -u origin "$BRANCH"
+
+          # Create PR for human review before Distribution picks it up
+          gh pr create \
+            --title "Content Draft: $(date -u +%Y-%m-%d) - ${{ steps.check_drafts.outputs.draft_count }} thread(s)" \
+            --body "$(cat <<'EOF'
+          ## Content Agent Output
+
+          **Drafts generated**: ${{ steps.check_drafts.outputs.draft_count }}
+          **Low confidence (needs review)**: ${{ steps.check_drafts.outputs.low_confidence }}
+
+          ### Review checklist
+          - [ ] Thread copy is accurate
+          - [ ] Bybit CTA is natural (not forced)
+          - [ ] No em-dashes
+          - [ ] Tone matches BotDAO voice
+          - [ ] All claims are sourced
+
+          Merge this PR to trigger the Distribution Agent.
+          EOF
+          )" \
+            --label "content-draft,awaiting-review"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Escalate low-confidence drafts
+        if: steps.check_drafts.outputs.low_confidence > 0
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '[Content] Low-confidence draft needs Governance review',
+              body: `${${{ steps.check_drafts.outputs.low_confidence }}} draft(s) scored below 70 confidence. Check \`${process.env.ESCALATION_DIR}/\` for details.`,
+              labels: ['content-escalation', 'governance-review']
+            });
+
+      - name: Update agent health
+        run: |
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "content: $TIMESTAMP" >> state/agent-health.md
+
+      - name: Close Scout issues
+        if: steps.check_drafts.outputs.draft_count > 0
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Find open Scout brief issues and add comment that Content has processed them
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'awaiting-content',
+              state: 'open'
+            });
+            for (const issue of issues.data) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: 'Content Agent has processed this brief. Draft PR created for review.'
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: ['scout-brief', 'content-drafted']
+              });
+            }

@@ -1,0 +1,129 @@
+name: Distribution Agent - Publish Content
+
+on:
+  # Triggers when Content PR is merged to main
+  pull_request:
+    types: [closed]
+    paths:
+      - 'handoffs/content-to-distribution/drafts/**'
+  # Manual trigger for immediate publishing
+  workflow_dispatch:
+    inputs:
+      draft_file:
+        description: 'Specific draft file to publish'
+        required: false
+        default: ''
+      dry_run:
+        description: 'Preview without posting (true/false)'
+        required: false
+        default: 'true'
+
+permissions:
+  contents: write
+  issues: write
+
+env:
+  DRAFTS_DIR: handoffs/content-to-distribution/drafts
+  PUBLISHED_DIR: handoffs/distribution-to-analytics/published
+
+jobs:
+  publish:
+    # Only run on merged PRs (not closed/rejected)
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install tweepy anthropic
+
+      - name: Find pending drafts
+        id: find_drafts
+        run: |
+          if [ -n "${{ github.event.inputs.draft_file }}" ]; then
+            echo "drafts=$DRAFTS_DIR/${{ github.event.inputs.draft_file }}" >> $GITHUB_OUTPUT
+          else
+            PENDING=$(grep -rl "status: pending" "$DRAFTS_DIR/" 2>/dev/null || true)
+            echo "drafts=$PENDING" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish to X/Twitter
+        if: >
+          steps.find_drafts.outputs.drafts != '' &&
+          github.event.inputs.dry_run != 'true'
+        run: |
+          python scripts/distribution-publish.py \
+            --drafts "${{ steps.find_drafts.outputs.drafts }}" \
+            --platform twitter \
+            --account bo7dao \
+            --output-dir "$PUBLISHED_DIR"
+        env:
+          TWITTER_API_KEY: ${{ secrets.TWITTER_API_KEY }}
+          TWITTER_API_SECRET: ${{ secrets.TWITTER_API_SECRET }}
+          TWITTER_ACCESS_TOKEN: ${{ secrets.TWITTER_ACCESS_TOKEN }}
+          TWITTER_ACCESS_SECRET: ${{ secrets.TWITTER_ACCESS_SECRET }}
+
+      - name: Dry run preview
+        if: github.event.inputs.dry_run == 'true'
+        run: |
+          echo "=== DRY RUN - Preview Only ==="
+          for draft in ${{ steps.find_drafts.outputs.drafts }}; do
+            echo ""
+            echo "--- $draft ---"
+            # Extract just the Content section
+            sed -n '/^## Content$/,/^## /p' "$draft" | head -n -1
+            echo ""
+            echo "Confidence: $(grep -oP 'confidence:\s*\K\d+' "$draft")"
+            echo "Priority: $(grep -oP 'priority:\s*\K\w+' "$draft")"
+          done
+
+      - name: Move drafts to published
+        if: github.event.inputs.dry_run != 'true'
+        run: |
+          mkdir -p "$PUBLISHED_DIR"
+          for draft in ${{ steps.find_drafts.outputs.drafts }}; do
+            FILENAME=$(basename "$draft")
+            # Update status in draft
+            sed -i 's/status: pending/status: published/' "$draft"
+            # Add publish timestamp
+            TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            sed -i "/^status: published/a published_at: $TIMESTAMP" "$draft"
+            # Copy to published folder for Analytics
+            cp "$draft" "$PUBLISHED_DIR/$FILENAME"
+          done
+
+      - name: Commit publish records
+        if: github.event.inputs.dry_run != 'true'
+        run: |
+          git config user.name "BotDAO Distribution Agent"
+          git config user.email "distribution@botdao.ai"
+          git add "$DRAFTS_DIR/" "$PUBLISHED_DIR/" state/ logs/
+          git commit -m "distribution: published $(echo '${{ steps.find_drafts.outputs.drafts }}' | wc -w) thread(s) to @bo7dao"
+          git push
+
+      - name: Create Analytics tracking issue
+        if: github.event.inputs.dry_run != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[Analytics] Track engagement: ${new Date().toISOString().slice(0,10)}`,
+              body: `Content published to @bo7dao. Analytics Agent should check engagement in 24h.\n\nCheck \`${process.env.PUBLISHED_DIR}/\` for published drafts.`,
+              labels: ['analytics-tracking', 'awaiting-analytics']
+            });
+
+      - name: Update agent health
+        run: |
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "distribution: $TIMESTAMP" >> state/agent-health.md

@@ -1,0 +1,81 @@
+name: Analytics Agent - Engagement Report
+
+on:
+  # Run daily at midnight UTC
+  schedule:
+    - cron: '0 0 * * *'
+  # Manual trigger
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+env:
+  PUBLISHED_DIR: handoffs/distribution-to-analytics/published
+  SCORES_DIR: handoffs/analytics-to-scout/scores
+  TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN }}
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install tweepy anthropic
+
+      - name: Pull engagement metrics
+        run: |
+          python scripts/analytics-report.py \
+            --published-dir "$PUBLISHED_DIR" \
+            --scores-dir "$SCORES_DIR" \
+            --account bo7dao
+        env:
+          TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN }}
+          BYBIT_AFFILIATE_ID: EJ7ENB
+
+      - name: Commit scores
+        run: |
+          git config user.name "BotDAO Analytics Agent"
+          git config user.email "analytics@botdao.ai"
+          git add "$SCORES_DIR/" data/ state/ logs/
+          git diff --cached --quiet || git commit -m "analytics: daily engagement report $(date -u +%Y-%m-%d)"
+          git push
+
+      - name: Close tracking issues
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'awaiting-analytics',
+              state: 'open'
+            });
+            for (const issue of issues.data) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: 'Analytics report generated. Scores written to `handoffs/analytics-to-scout/scores/`.'
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed'
+              });
+            }
+
+      - name: Update agent health
+        run: |
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "analytics: $TIMESTAMP" >> state/agent-health.md

@@ -71,3 +71,16 @@ Handoff file statuses follow this flow:
 - Vault contract: [address TBD]
 - Governance contract: [address TBD]
 - All publish events, disbursements, and governance actions get on-chain attestation hashes written to the corresponding log file
+
+## Bybit Conversion Campaign (Active)
+
+- **Affiliate link:** https://www.bybit.com/invite?ref=EJ7ENB
+- **Ref code:** EJ7ENB
+- **Goal:** Drive Bybit signups via X/Twitter content
+- **Commission:** 20% base, 25% at 5 referees, 30% at 100 referees
+- **Referee qualification:** Sign up → deposit $100 within 7 days → trade $500 within 30 days
+- **Reward per signup:** 10 USDT (deposit task) + 15 USDT (trade task) + Mystery Box up to 1,000 USDT (advanced trade) + more
+- **Max potential per referee:** Up to 1,720 USDT across all tasks
+- **Full program details:** `data/bybit-referral-program.md`
+- **Agent integration:** Scout config and Content config updated (BDP-002) with conversion angle templates, +15 scoring boost for Bybit signals, 80% max CTA frequency
+- **Upgrade path:** Bybit Affiliate Program (affiliates.bybit.com) offers lifetime commissions on taker fees + daily payouts + dedicated account manager. Consider switching when 50+ active referees. Warning: switching forfeits Referral Program rewards.
