@@ -19,7 +19,6 @@ on:
 permissions:
   contents: write
   issues: write
-  pull-requests: write
 
 env:
   ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -49,11 +48,13 @@ jobs:
           python scripts/scout-scan.py \
             --config "$SCOUT_CONFIG" \
             --output-dir "$BRIEFS_DIR" \
-            --priority-override "${{ github.event.inputs.priority_override }}" \
-            --focus-topic "${{ github.event.inputs.focus_topic }}"
+            --priority-override "$PRIORITY_OVERRIDE" \
+            --focus-topic "$FOCUS_TOPIC"
         env:
           DEFILLAMA_API: https://api.llama.fi
           TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN }}
+          PRIORITY_OVERRIDE: ${{ github.event.inputs.priority_override }}
+          FOCUS_TOPIC: ${{ github.event.inputs.focus_topic }}
 
       - name: Check for new briefs
         id: check_briefs

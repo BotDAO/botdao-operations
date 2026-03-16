@@ -15,7 +15,7 @@ on:
 
 permissions:
   contents: write
-  issues: write
+  issues: write  # needed for low-confidence escalation issues
   pull-requests: write
 
 env:
@@ -43,9 +43,11 @@ jobs:
 
       - name: Find pending briefs
         id: find_briefs
+        env:
+          BRIEF_FILE_INPUT: ${{ github.event.inputs.brief_file }}
         run: |
-          if [ -n "${{ github.event.inputs.brief_file }}" ]; then
-            echo "briefs=$BRIEFS_DIR/${{ github.event.inputs.brief_file }}" >> $GITHUB_OUTPUT
+          if [ -n "$BRIEF_FILE_INPUT" ]; then
+            echo "briefs=$BRIEFS_DIR/$BRIEF_FILE_INPUT" >> $GITHUB_OUTPUT
           else
             # Find all briefs with status: pending
             PENDING=$(grep -rl "status: pending" "$BRIEFS_DIR/" 2>/dev/null || true)

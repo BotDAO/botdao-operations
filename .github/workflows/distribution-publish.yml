@@ -20,7 +20,7 @@ on:
 
 permissions:
   contents: write
-  issues: write
+  issues: write  # needed for analytics tracking issues
 
 env:
   DRAFTS_DIR: handoffs/content-to-distribution/drafts
@@ -48,9 +48,11 @@ jobs:
 
       - name: Find pending drafts
         id: find_drafts
+        env:
+          DRAFT_FILE_INPUT: ${{ github.event.inputs.draft_file }}
         run: |
-          if [ -n "${{ github.event.inputs.draft_file }}" ]; then
-            echo "drafts=$DRAFTS_DIR/${{ github.event.inputs.draft_file }}" >> $GITHUB_OUTPUT
+          if [ -n "$DRAFT_FILE_INPUT" ]; then
+            echo "drafts=$DRAFTS_DIR/$DRAFT_FILE_INPUT" >> $GITHUB_OUTPUT
           else
             PENDING=$(grep -rl "status: pending" "$DRAFTS_DIR/" 2>/dev/null || true)
             echo "drafts=$PENDING" >> $GITHUB_OUTPUT

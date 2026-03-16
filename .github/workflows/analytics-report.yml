@@ -9,7 +9,7 @@ on:
 
 permissions:
   contents: write
-  issues: write
+  issues: write  # needed to close tracking issues
 
 env:
   PUBLISHED_DIR: handoffs/distribution-to-analytics/published
